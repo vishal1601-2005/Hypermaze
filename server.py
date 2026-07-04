@@ -41,6 +41,7 @@ import logging
 from collections import defaultdict
 
 import hyperbolic_maze as hm
+import local_cycles
 from decoy_layer import SuperpositionGroup
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -71,7 +72,17 @@ class MazeSession:
     own lazily-materialized tree rooted at a fresh origin, so no client can
     exhaust another client's resources and no client can pre-map another
     client's maze (their branchings/edge choices are independently random-
-    seeded per session)."""
+    seeded per session).
+
+    Each room's doors now include both its own children (new, unexplored
+    territory) AND local ring links to its siblings (already-materialized
+    rooms from the same parent). Both kinds of door look identical from
+    the "look" output -- there's no way to tell, without walking through
+    one, whether a given door leads somewhere new or loops back to
+    already-explored territory. This also fixes a real structural
+    weakness of a pure tree: previously every room had exactly one path
+    back to the entry point; now there are local redundant paths, which
+    is what a real network/building actually looks like."""
 
     def __init__(self, session_id):
         self.session_id = session_id
@@ -81,6 +92,7 @@ class MazeSession:
         self._next_id = 1
         self.current = self.root
         self.honeytokens = {}   # node_id -> token name, assigned lazily
+        self.ring_links = {}    # node_id -> list of sibling node_ids
         self.anomaly_score = 0.0
         self.caught = False
 
@@ -99,23 +111,38 @@ class MazeSession:
                     self.honeytokens[c.id] = self.rng.choice(
                         ["admin_credentials.txt", "backup_keys.pem", "customer_db.sql", "root_shell.sh"]
                     )
+            # Wire this sibling group into a local ring -- fully computable
+            # from just these children, no knowledge of any other branch
+            # needed, so this stays compatible with lazy generation.
+            ring = local_cycles.wire_local_ring(children)
+            for node_id, neighbor_ids in ring.items():
+                self.ring_links.setdefault(node_id, []).extend(neighbor_ids)
         return node.children
 
+    def _doors(self, node):
+        """Combined list of reachable rooms from this node: its own
+        children (via _expand, lazily materialized) plus any ring-linked
+        siblings (already materialized, no expansion needed)."""
+        children = self._expand(node)
+        ring_neighbor_ids = self.ring_links.get(node.id, [])
+        ring_neighbors = [self.materialized[nid] for nid in ring_neighbor_ids]
+        return list(children) + ring_neighbors
+
     def look(self):
-        children = self._expand(self.current)
+        doors = self._doors(self.current)
         lines = [
             f"You are in room #{self.current.id} (depth {self.current.depth}).",
-            f"Doors: {len(children)}" + (" (dead end)" if not children else ""),
+            f"Doors: {len(doors)}" + (" (dead end)" if not doors else ""),
         ]
         if self.current.id in self.honeytokens:
             lines.append(f"There is a file here: {self.honeytokens[self.current.id]}")
         return "\n".join(lines)
 
     def go(self, door_index):
-        children = self._expand(self.current)
-        if door_index < 0 or door_index >= len(children):
+        doors = self._doors(self.current)
+        if door_index < 0 or door_index >= len(doors):
             return "There is no door there."
-        self.current = children[door_index]
+        self.current = doors[door_index]
         return self.look()
 
     def back(self):
@@ -141,9 +168,11 @@ class MazeSession:
         return f"You take {token}."
 
     def status(self):
+        total_ring_links = sum(len(v) for v in self.ring_links.values()) // 2
         return "\n".join([
             f"session: {self.session_id}",
             f"rooms materialized this session: {len(self.materialized)}",
+            f"local ring links (redundant paths): {total_ring_links}",
             f"current depth: {self.current.depth}",
             f"flagged: {self.caught}",
         ])
