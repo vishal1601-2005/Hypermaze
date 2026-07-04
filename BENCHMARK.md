@@ -113,13 +113,31 @@ on the real session → migrate invisibly" from "flag was on a decoy →
 keep it running as an instrumented tarpit," and the group's visible shape
 never changes size when this happens.
 
+## Validation history
+
+Beyond the automated test suite, this system has been exercised against escalating levels of real-world conditions:
+
+| Milestone | Status | Notes |
+|---|---|---|
+| Unit tests (geometry, isometry, decoy layer) | ✅ Done | 20/20 passing, deterministic, reproducible across machines |
+| Live server, manual single-user exploration | ✅ Done | Confirmed detection fires correctly on honeytoken pickup |
+| Concurrency hardening | ✅ Done | 300 simultaneous connection attempts, 0 crashes; connection limits (global + per-IP) enforced correctly |
+| Fuzz/malformed-input hardening | ✅ Done | 17 adversarial payloads (oversized input, binary garbage, injection-shaped strings, slowloris-style no-newline data) — 0 unhandled exceptions after a real bug fix (Python's `readline()` silently converts its own `LimitOverrunError` into a bare `ValueError`, which the first hardening pass didn't catch) |
+| Real network hop (LAN, cross-device) | ✅ Done | Server exposed via Windows port-forwarding (`netsh portproxy`) + firewall rule from a WSL2 host, reached over real WiFi from a second physical device on a mobile hotspot network, using an independent TCP client app (not the same tooling used for local testing). Exploration and honeytoken detection both confirmed working end-to-end over this path. |
+| Open-internet exposure | ❌ Not done | No public/cloud deployment yet — see "What this is NOT (yet)" below |
+| Independent red-teaming | ❌ Not done | All attacker models used so far were written by the same people who wrote the defense |
+
+The LAN test is a genuine, if modest, real-world validation step: it's the first time any part of this system was reached by a device other than the one it runs on, across a real wireless hop and a real NAT/firewall path, rather than over loopback. It does not substitute for open-internet exposure (different threat model entirely — background-radiation scanning, real adversarial traffic, no assumption of a trusted local network) or for review by anyone who didn't build the thing.
+
 ## What this is NOT (yet)
 
 - **Not a hardened, deployable security product.** No auth, no TLS, no
-  rate limiting beyond a hardcoded room cap, no integration with a real
-  IDS, SDN controller, or session-migration fabric. The server is a
-  research/demo tool — run it in an isolated environment (a VM, a
-  container, localhost), not on the open internet.
+  rate limiting beyond the connection caps and idle timeout added during
+  hardening, no integration with a real IDS, SDN controller, or
+  session-migration fabric. The server has been validated over a real LAN
+  hop (see "Validation history" above) but never exposed to the open
+  internet — treat it as a tested research/demo tool for an isolated or
+  monitored network, not a production-ready public service.
 - **Not independently red-teamed.** Everything here is validated against
   the attacker models we wrote ourselves (random walk, systematic DFS).
   A real adversary might have strategies these simulations don't capture
